@@ -2,9 +2,9 @@
 #                                                                                        #
 #                * Azure Resource Inventory ( ARI ) Report Generator *                   #
 #                                                                                        #
-#       Version: 3.1.04                                                                  #
+#       Version: 3.1.11                                                                  #
 #                                                                                        #
-#       Date: 07/21/2023                                                                 #
+#       Date: 11/23/2023                                                                 #
 #                                                                                        #
 ##########################################################################################
 <#
@@ -71,12 +71,13 @@ param ($TenantID,
         $ManagementGroup,
         $Appid, 
         $Secret, 
-        $ResourceGroup, 
+        [string[]]$ResourceGroup, 
         $TagKey, 
         $TagValue,
         [switch]$SkipAdvisory,
         [switch]$SkipPolicy,
-        [switch]$IncludeTags, 
+        [switch]$IncludeTags,
+        [switch]$HeavyLoad, 
         [switch]$QuotaUsage, 
         [switch]$Online, 
         [switch]$Diagram,
@@ -112,7 +113,7 @@ param ($TenantID,
         Write-Host ""
         Write-Host " -TenantID <ID>        :  Specifies the Tenant to be inventoried. "
         Write-Host " -SubscriptionID <ID>  :  Specifies Subscription(s) to be inventoried. "
-        Write-Host " -ResourceGroup <NAME> :  Specifies one unique Resource Group to be inventoried, This parameter requires the -SubscriptionID to work. "
+        Write-Host " -ResourceGroup  <NAME>:  Specifies one (or more) unique Resource Group to be inventoried, This parameter requires the -SubscriptionID to work. "
         Write-Host " -TagKey <NAME>        :  Specifies the tag key to be inventoried, This parameter requires the -SubscriptionID to work. "
         Write-Host " -TagValue <NAME>      :  Specifies the tag value be inventoried, This parameter requires the -SubscriptionID to work. "
         Write-Host " -SkipAdvisory         :  Do not collect Azure Advisory. "
@@ -544,7 +545,7 @@ param ($TenantID,
 
                 $Subscri = $SubscriptionID
 
-                $GraphQuery = "resources | where resourceGroup == '$ResourceGroup' and strlen(properties.definition.actions) < 123000 | summarize count()"
+                $GraphQuery = "resources | where resourceGroup in ('$([String]::Join("','",$ResourceGroup))') and strlen(properties.definition.actions) < 123000 | summarize count()"
                 $EnvSize = az graph query -q $GraphQuery --subscriptions $Subscri --output json --only-show-errors | ConvertFrom-Json
                 $EnvSizeNum = $EnvSize.data.'count_'
 
@@ -555,7 +556,7 @@ param ($TenantID,
                     $Limit = 0
 
                     while ($Looper -lt $Loop) {
-                        $GraphQuery = "resources | where resourceGroup == '$ResourceGroup' and strlen(properties.definition.actions) < 123000 | project id,name,type,tenantId,kind,location,resourceGroup,subscriptionId,managedBy,sku,plan,properties,identity,zones,extendedLocation$($GraphQueryTags) | order by id asc"
+                        $GraphQuery = "resources | where resourceGroup in ('$([String]::Join("','",$ResourceGroup))') and strlen(properties.definition.actions) < 123000 | project id,name,type,tenantId,kind,location,resourceGroup,subscriptionId,managedBy,sku,plan,properties,identity,zones,extendedLocation$($GraphQueryTags) | order by id asc"
                         $Resource = (az graph query -q $GraphQuery --subscriptions $Subscri --skip $Limit --first 1000 --output json --only-show-errors).tolower() | ConvertFrom-Json
 
                         $Global:Resources += $Resource.data
@@ -783,7 +784,7 @@ param ($TenantID,
                 $GraphQueryExtension = "| join kind=inner (resourcecontainers | where type == 'microsoft.resources/subscriptions' | mv-expand managementGroupParent = properties.managementGroupAncestorsChain | where managementGroupParent.name =~ '$ManagementGroup' | project subscriptionId, managanagementGroup = managementGroupParent.name) on subscriptionId"
             }
             if (![string]::IsNullOrEmpty($ResourceGroup)) {
-                $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup == '$ResourceGroup'"
+                $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup in ('$([String]::Join("','",$ResourceGroup))')"
             }
             $GraphQuery = "advisorresources $GraphQueryExtension | summarize count()"
 
@@ -834,7 +835,7 @@ param ($TenantID,
                 $GraphQueryExtension = "| join kind=inner (resourcecontainers | where type == 'microsoft.resources/subscriptions' | mv-expand managementGroupParent = properties.managementGroupAncestorsChain | where managementGroupParent.name =~ '$ManagementGroup' | project subscriptionId, managanagementGroup = managementGroupParent.name) on subscriptionId"
             }
             if (![string]::IsNullOrEmpty($ResourceGroup)) {
-                $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup == '$ResourceGroup'"
+                $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup in ('$([String]::Join("','",$ResourceGroup))')"
             }
             #$SecSize = az graph query -q  "securityresources | where properties['status']['code'] == 'Unhealthy' | summarize count()" --subscriptions $Subscri --output json --only-show-errors | ConvertFrom-Json
             $SecSize = az graph query -q  "securityresources $GraphQueryExtension | where properties['status']['code'] == 'Unhealthy' | summarize count()" --output json --only-show-errors | ConvertFrom-Json
@@ -879,7 +880,7 @@ param ($TenantID,
             $GraphQueryExtension = "| join kind=inner (resourcecontainers | where type == 'microsoft.resources/subscriptions' | mv-expand managementGroupParent = properties.managementGroupAncestorsChain | where managementGroupParent.name =~ '$ManagementGroup' | project subscriptionId, managanagementGroup = managementGroupParent.name) on subscriptionId"
         }
         if (![string]::IsNullOrEmpty($ResourceGroup)) {
-            $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup == '$ResourceGroup'"
+            $GraphQueryExtension = "$GraphQueryExtension | where resourceGroup in ('$([String]::Join("','",$ResourceGroup))')"
         }
         #$AVDSize = az graph query -q "desktopvirtualizationresources | summarize count()" --subscriptions $Subscri --output json --only-show-errors | ConvertFrom-Json
         $AVDSize = az graph query -q "desktopvirtualizationresources $GraphQueryExtension | summarize count()" --output json --only-show-errors | ConvertFrom-Json
@@ -976,10 +977,8 @@ param ($TenantID,
                     $ModuSeq = $ModuSeq0.ReadToEnd()
                     $ModuSeq0.Dispose()  
                 }                  
-                    
-                $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-                    
-                $DrawRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2] | ConvertFrom-Json)).AddArgument($($args[3])).AddArgument($($args[4])).AddArgument($($args[5])).AddArgument($($args[6])).AddArgument($($args[7]))
+
+                $DrawRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2] | ConvertFrom-Json)).AddArgument($($args[3])).AddArgument($($args[4])).AddArgument($($args[5])).AddArgument($($args[6])).AddArgument($($args[7]))
 
                 $DrawJob = $DrawRun.BeginInvoke()
 
@@ -1048,9 +1047,7 @@ param ($TenantID,
                     $ModuSeq0.Dispose()
                 }
 
-                $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-                $SecRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3]))
+                $SecRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3]))
 
                 $SecJob = $SecRun.BeginInvoke()
 
@@ -1088,9 +1085,7 @@ param ($TenantID,
                     $ModuSeq0.Dispose()
                 }
 
-                $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-                $PolRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4]))
+                $PolRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4]))
 
                 $PolJob = $PolRun.BeginInvoke()
 
@@ -1128,9 +1123,7 @@ param ($TenantID,
                     $ModuSeq0.Dispose()
                 }
 
-                $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-                $AdvRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3]))
+                $AdvRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3]))
 
                 $AdvJob = $AdvRun.BeginInvoke()
 
@@ -1166,9 +1159,7 @@ param ($TenantID,
                 $ModuSeq0.Dispose()
             }
 
-            $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-            $SubRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4]))
+            $SubRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4]))
 
             $SubJob = $SubRun.BeginInvoke()
 
@@ -1184,95 +1175,190 @@ param ($TenantID,
 
         <######################################################### RESOURCE GROUP JOB ######################################################################>
 
-        Write-Debug ('Starting Processing Jobs.')
+        if ($HeavyLoad.IsPresent) {
+            Write-Debug ('Starting Processing Jobs in Heavy Mode.')
 
-        $Loop = $resources.count / 1000
-        $Loop = [math]::ceiling($Loop)
-        $Looper = 0
-        $Limit = 0                    
+            $Loop = $resources.count / 2500
+            $Loop = [math]::ceiling($Loop)
+            $Looper = 0
+            $Limit = 0                    
 
-        while ($Looper -lt $Loop) {
-            $Looper ++            
+            while ($Looper -lt $Loop) {
+                $Looper ++            
 
-            $Resource = $resources | Select-Object -First 1000 -Skip $Limit
+                $Resource = $resources | Select-Object -First 2500 -Skip $Limit
 
-            Start-Job -Name ('ResourceJob_'+$Looper) -ScriptBlock {
+                Start-Job -Name ('ResourceJob_'+$Looper) -ScriptBlock {
 
-                    $Job = @()
+                        $Job = @()
 
-                    $Repo = $($args[10])
-                    $RawRepo = $($args[11])
+                        $Repo = $($args[10])
+                        $RawRepo = $($args[11])
 
-                    If ($($args[9]) -eq $true) {
-                        $OnlineRepo = Invoke-WebRequest -Uri $Repo
-                        $RepoContent = $OnlineRepo | ConvertFrom-Json
-                        $Modules = ($RepoContent.tree | Where-Object {$_.path -like '*.ps1' -and $_.path -notlike 'Extras/*' -and $_.path -ne 'AzureResourceInventory.ps1' -and $_.path -notlike 'Automation/*'}).path
-                    }
-                    Else {
-                        if($($args[1]) -like '*\*')
-                            {
-                                $Modules = Get-ChildItem -Path ($($args[1]) + '\Modules\*.ps1') -Recurse
+                        If ($($args[9]) -eq $true) {
+                            $OnlineRepo = Invoke-WebRequest -Uri $Repo
+                            $RepoContent = $OnlineRepo | ConvertFrom-Json
+                            $Modules = ($RepoContent.tree | Where-Object {$_.path -like '*.ps1' -and $_.path -notlike 'Extras/*' -and $_.path -ne 'AzureResourceInventory.ps1' -and $_.path -notlike 'Automation/*'}).path
+                        }
+                        Else {
+                            if($($args[1]) -like '*\*')
+                                {
+                                    $Modules = Get-ChildItem -Path ($($args[1]) + '\Modules\*.ps1') -Recurse
+                                }
+                            else
+                                {
+                                    $Modules = Get-ChildItem -Path ($($args[1]) + '/Modules/*.ps1') -Recurse
+                                }
+                        }
+                        $job = @()
+
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                    $ModuSeq = (New-Object System.Net.WebClient).DownloadString($RawRepo + '/' + $Module)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                                    $ModuSeq0 = New-Object System.IO.StreamReader($Module.FullName)
+                                    $ModuSeq = $ModuSeq0.ReadToEnd()
+                                    $ModuSeq0.Dispose()                                    
                             }
-                        else
-                            {
-                                $Modules = Get-ChildItem -Path ($($args[1]) + '/Modules/*.ps1') -Recurse
+
+                            New-Variable -Name ('ModRun' + $ModName)
+                            New-Variable -Name ('ModJob' + $ModName)
+
+                            Set-Variable -Name ('ModRun' + $ModName) -Value ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4] | ConvertFrom-Json)).AddArgument($($args[5])).AddArgument($null).AddArgument($null).AddArgument($null).AddArgument($($args[12]))
+
+                            Set-Variable -Name ('ModJob' + $ModName) -Value ((get-variable -name ('ModRun' + $ModName)).Value).BeginInvoke()
+
+                            $job += (get-variable -name ('ModJob' + $ModName)).Value
+                            Start-Sleep -Milliseconds 500 
+                        }
+
+                        while ($Job.Runspace.IsCompleted -contains $false) { Start-Sleep -Milliseconds 1000 }
+
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
                             }
-                    }
-                    $job = @()
 
-                    foreach ($Module in $Modules) {
-                        If ($($args[9]) -eq $true) {
-                                $Modul = $Module.split('/')
-                                $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
-                                $ModuSeq = (New-Object System.Net.WebClient).DownloadString($RawRepo + '/' + $Module)
-                            } Else {
-                                $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
-                                $ModuSeq0 = New-Object System.IO.StreamReader($Module.FullName)
-                                $ModuSeq = $ModuSeq0.ReadToEnd()
-                                $ModuSeq0.Dispose()
+                            New-Variable -Name ('ModValue' + $ModName)
+                            Set-Variable -Name ('ModValue' + $ModName) -Value (((get-variable -name ('ModRun' + $ModName)).Value).EndInvoke((get-variable -name ('ModJob' + $ModName)).Value))
+                            Start-Sleep -Milliseconds 100 
                         }
 
-                        $ScriptBlock = [Scriptblock]::Create($ModuSeq)
+                        $Hashtable = New-Object System.Collections.Hashtable
 
-                        New-Variable -Name ('ModRun' + $ModName)
-                        New-Variable -Name ('ModJob' + $ModName)
-
-                        Set-Variable -Name ('ModRun' + $ModName) -Value ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4] | ConvertFrom-Json)).AddArgument($($args[5])).AddArgument($null).AddArgument($null).AddArgument($null).AddArgument($($args[12]))
-
-                        Set-Variable -Name ('ModJob' + $ModName) -Value ((get-variable -name ('ModRun' + $ModName)).Value).BeginInvoke()
-
-                        $job += (get-variable -name ('ModJob' + $ModName)).Value
-                    }
-
-                    while ($Job.Runspace.IsCompleted -contains $false) { Start-Sleep -Milliseconds 100 }
-
-                    foreach ($Module in $Modules) {
-                        If ($($args[9]) -eq $true) {
-                                $Modul = $Module.split('/')
-                                $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
-                            } Else {
-                                $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                            }
+                            $Hashtable["$ModName"] = (get-variable -name ('ModValue' + $ModName)).Value
                         }
 
-                        New-Variable -Name ('ModValue' + $ModName)
-                        Set-Variable -Name ('ModValue' + $ModName) -Value (((get-variable -name ('ModRun' + $ModName)).Value).EndInvoke((get-variable -name ('ModJob' + $ModName)).Value))
-                    }
+                    $Hashtable
+                    } -ArgumentList $null, $PSScriptRoot, $Subscriptions, $InTag, ($Resource | ConvertTo-Json -Depth 50), 'Processing', $null, $null, $null, $RunOnline, $Repo, $RawRepo, $Unsupported | Out-Null                    
+                    $Limit = $Limit + 2500
+                    Start-Sleep -Milliseconds 100    
+                }
+        
+            }
+        else{
+            Write-Debug ('Starting Processing Jobs in Regular Mode.')
 
-                    $Hashtable = New-Object System.Collections.Hashtable
+            $Loop = $resources.count / 1000
+            $Loop = [math]::ceiling($Loop)
+            $Looper = 0
+            $Limit = 0                    
 
-                    foreach ($Module in $Modules) {
+            while ($Looper -lt $Loop) {
+                $Looper ++            
+
+                $Resource = $resources | Select-Object -First 1000 -Skip $Limit
+
+                Start-Job -Name ('ResourceJob_'+$Looper) -ScriptBlock {
+
+                        $Job = @()
+
+                        $Repo = $($args[10])
+                        $RawRepo = $($args[11])
+
                         If ($($args[9]) -eq $true) {
-                                $Modul = $Module.split('/')
-                                $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
-                            } Else {
-                                $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                            $OnlineRepo = Invoke-WebRequest -Uri $Repo
+                            $RepoContent = $OnlineRepo | ConvertFrom-Json
+                            $Modules = ($RepoContent.tree | Where-Object {$_.path -like '*.ps1' -and $_.path -notlike 'Extras/*' -and $_.path -ne 'AzureResourceInventory.ps1' -and $_.path -notlike 'Automation/*'}).path
                         }
-                        $Hashtable["$ModName"] = (get-variable -name ('ModValue' + $ModName)).Value
-                    }
+                        Else {
+                            if($($args[1]) -like '*\*')
+                                {
+                                    $Modules = Get-ChildItem -Path ($($args[1]) + '\Modules\*.ps1') -Recurse
+                                }
+                            else
+                                {
+                                    $Modules = Get-ChildItem -Path ($($args[1]) + '/Modules/*.ps1') -Recurse
+                                }
+                        }
+                        $job = @()
 
-                $Hashtable
-                } -ArgumentList $null, $PSScriptRoot, $Subscriptions, $InTag, ($Resource | ConvertTo-Json -Depth 50), 'Processing', $null, $null, $null, $RunOnline, $Repo, $RawRepo, $Unsupported | Out-Null                    
-                $Limit = $Limit + 1000   
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                    $ModuSeq = (New-Object System.Net.WebClient).DownloadString($RawRepo + '/' + $Module)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                                    $ModuSeq0 = New-Object System.IO.StreamReader($Module.FullName)
+                                    $ModuSeq = $ModuSeq0.ReadToEnd()
+                                    $ModuSeq0.Dispose()
+                            }
+
+                            New-Variable -Name ('ModRun' + $ModName)
+                            New-Variable -Name ('ModJob' + $ModName)
+
+                            Set-Variable -Name ('ModRun' + $ModName) -Value ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($($args[1])).AddArgument($($args[2])).AddArgument($($args[3])).AddArgument($($args[4] | ConvertFrom-Json)).AddArgument($($args[5])).AddArgument($null).AddArgument($null).AddArgument($null).AddArgument($($args[12]))
+
+                            Set-Variable -Name ('ModJob' + $ModName) -Value ((get-variable -name ('ModRun' + $ModName)).Value).BeginInvoke()
+
+                            $job += (get-variable -name ('ModJob' + $ModName)).Value
+                        }
+
+                        while ($Job.Runspace.IsCompleted -contains $false) { Start-Sleep -Milliseconds 100 }
+
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                            }
+
+                            New-Variable -Name ('ModValue' + $ModName)
+                            Set-Variable -Name ('ModValue' + $ModName) -Value (((get-variable -name ('ModRun' + $ModName)).Value).EndInvoke((get-variable -name ('ModJob' + $ModName)).Value))
+                        }
+
+                        $Hashtable = New-Object System.Collections.Hashtable
+
+                        foreach ($Module in $Modules) {
+                            If ($($args[9]) -eq $true) {
+                                    $Modul = $Module.split('/')
+                                    $ModName = $Modul[2].Substring(0, $Modul[2].length - ".ps1".length)
+                                } Else {
+                                    $ModName = $Module.Name.Substring(0, $Module.Name.length - ".ps1".length)
+                            }
+                            $Hashtable["$ModName"] = (get-variable -name ('ModValue' + $ModName)).Value
+                        }
+
+                    $Hashtable
+                    } -ArgumentList $null, $PSScriptRoot, $Subscriptions, $InTag, ($Resource | ConvertTo-Json -Depth 50), 'Processing', $null, $null, $null, $RunOnline, $Repo, $RawRepo, $Unsupported | Out-Null                    
+                    $Limit = $Limit + 1000   
+                }
+
             }
 
         <############################################################## RESOURCES LOOP CREATION #############################################################>
@@ -1356,9 +1442,7 @@ param ($TenantID,
 
                 Write-Debug "Running Module: '$Module'"
 
-            $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-            $ExcelRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($PSScriptRoot).AddArgument($null).AddArgument($InTag).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($SmaResources).AddArgument($TableStyle).AddArgument($Unsupported)
+            $ExcelRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($PSScriptRoot).AddArgument($null).AddArgument($InTag).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($SmaResources).AddArgument($TableStyle).AddArgument($Unsupported)
 
             $ExcelJob = $ExcelRun.BeginInvoke()
 
@@ -1406,9 +1490,7 @@ param ($TenantID,
                     $ModuSeq0.Dispose()
                 }
 
-                $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-                $QuotaRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($File).AddArgument($Global:AzQuota).AddArgument($TableStyle)
+                $QuotaRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($File).AddArgument($Global:AzQuota).AddArgument($TableStyle)
 
                 $QuotaJob = $QuotaRun.BeginInvoke()
 
@@ -1459,9 +1541,7 @@ param ($TenantID,
                 $ModuSeq0.Dispose()
             }
 
-            $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-            $SecExcelRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($null).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($Sec).AddArgument($TableStyle)
+            $SecExcelRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($null).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($Sec).AddArgument($TableStyle)
 
             $SecExcelJob = $SecExcelRun.BeginInvoke()
 
@@ -1510,9 +1590,7 @@ param ($TenantID,
                 $ModuSeq0.Dispose()
             }
 
-            $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-            $PolExcelRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($null).AddArgument('Reporting').AddArgument($null).AddArgument($file).AddArgument($Pol).AddArgument($TableStyle)
+            $PolExcelRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($null).AddArgument('Reporting').AddArgument($null).AddArgument($file).AddArgument($Pol).AddArgument($TableStyle)
 
             $PolExcelJob = $PolExcelRun.BeginInvoke()
 
@@ -1561,9 +1639,7 @@ param ($TenantID,
                 $ModuSeq0.Dispose()
             }
 
-            $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-            $AdvExcelRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($Adv).AddArgument($TableStyle)
+            $AdvExcelRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($Adv).AddArgument($TableStyle)
 
             $AdvExcelJob = $AdvExcelRun.BeginInvoke()
 
@@ -1599,9 +1675,7 @@ param ($TenantID,
             $ModuSeq0.Dispose()
         }
 
-        $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
-        $SubsRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($null).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($AzSubs).AddArgument($TableStyle)
+        $SubsRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($null).AddArgument($null).AddArgument('Reporting').AddArgument($file).AddArgument($AzSubs).AddArgument($TableStyle)
 
         $SubsJob = $SubsRun.BeginInvoke()
 
@@ -1640,11 +1714,9 @@ param ($TenantID,
 
     }
 
-        $ScriptBlock = [Scriptblock]::Create($ModuSeq)
-
         Write-Progress -activity 'Azure Resource Inventory Reporting Charts' -Status "15% Complete." -PercentComplete 15 -CurrentOperation "Invoking Excel Chart's Thread."
 
-        $ChartsRun = ([PowerShell]::Create()).AddScript($ScriptBlock).AddArgument($file).AddArgument($TableStyle).AddArgument($Global:PlatOS).AddArgument($Global:Subscriptions).AddArgument($Global:Resources.Count).AddArgument($ExtractionRunTime).AddArgument($ReportingRunTime).AddArgument($RunLite)
+        $ChartsRun = ([PowerShell]::Create()).AddScript($ModuSeq).AddArgument($file).AddArgument($TableStyle).AddArgument($Global:PlatOS).AddArgument($Global:Subscriptions).AddArgument($Global:Resources.Count).AddArgument($ExtractionRunTime).AddArgument($ReportingRunTime).AddArgument($RunLite)
 
         $ChartsJob = $ChartsRun.BeginInvoke()
 
@@ -1724,4 +1796,3 @@ if(!$SkipDiagram.IsPresent)
         write-host $DDFile -ForegroundColor Cyan
         Write-Host ''
     }
-

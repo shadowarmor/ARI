@@ -13,7 +13,7 @@ https://github.com/microsoft/ARI/Modules/Networking/PublicIP.ps1
 This powershell Module is part of Azure Resource Inventory (ARI)
 
 .NOTES
-Version: 3.0.1
+Version: 3.1.1
 First Release Date: 19th November, 2020
 Authors: Claudio Merola and Renato Gregio 
 
@@ -60,7 +60,7 @@ If ($Task -eq 'Processing') {
                             'Retirement Feature'       = $RetFeature;
                             'Type'                     = $data.publicIPAllocationMethod;
                             'Version'                  = $data.publicIPAddressVersion;
-                            'IP Address'               = $data.ipAddress;
+                            'IP Address'               = [string]$data.ipAddress;
                             'Use'                      = $Use;
                             'Associated Resource'      = $data.ipConfiguration.id.split('/')[8];
                             'Associated Resource Type' = $data.ipConfiguration.id.split('/')[7];
@@ -86,7 +86,7 @@ If ($Task -eq 'Processing') {
                             'Retirement Feature'       = $RetFeature;
                             'Type'                     = $data.publicIPAllocationMethod;
                             'Version'                  = $data.publicIPAddressVersion;
-                            'IP Address'               = $data.ipAddress;
+                            'IP Address'               = [string]$data.ipAddress;
                             'Use'                      = $Use;
                             'Associated Resource'      = $null;
                             'Associated Resource Type' = $null;
@@ -133,11 +133,14 @@ Else {
                 $Exc.Add('Tag Value') 
             }
 
+        $noNumberConversion = @()
+        $noNumberConversion += 'IP Address'
+
         $ExcelVar = $SmaResources.PublicIP
 
         $ExcelVar | 
         ForEach-Object { [PSCustomObject]$_ } | Select-Object -Unique $Exc | 
-        Export-Excel -Path $File -WorksheetName 'Public IPs' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -Style $Style -ConditionalText $condtxt
+        Export-Excel -Path $File -WorksheetName 'Public IPs' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -Style $Style -ConditionalText $condtxt -NoNumberConversion $noNumberConversion
 
         $excel = Open-ExcelPackage -Path $File -KillExcel
     
